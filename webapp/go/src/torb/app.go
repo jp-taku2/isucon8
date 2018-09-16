@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -254,15 +255,19 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		event.Total++
 		event.Sheets[sheet.Rank].Total++
 
-		if cs, ok := cache[fmt.Sprintf("%d,%d", event.ID, sheet.ID)]; ok && len(cs) > 0 {
-			c := cs[0]
-			sheet.Mine = c.UserId == loginUserID
-			sheet.Reserved = true
-			sheet.ReservedAtUnix = c.ReservedAt.Unix()
-		} else {
-			event.Remains++
-			event.Sheets[sheet.Rank].Remains++
-		}
+		func() {
+			cacheLock.Lock()
+			defer cacheLock.Unlock()
+			if cs, ok := cache[fmt.Sprintf("%d,%d", event.ID, sheet.ID)]; ok && len(cs) > 0 {
+				c := cs[0]
+				sheet.Mine = c.UserId == loginUserID
+				sheet.Reserved = true
+				sheet.ReservedAtUnix = c.ReservedAt.Unix()
+			} else {
+				event.Remains++
+				event.Sheets[sheet.Rank].Remains++
+			}
+		}()
 
 		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
 	}
@@ -337,7 +342,7 @@ func initialize(c echo.Context) error {
 	if err != nil {
 		return nil
 	}
-
+	initCache()
 	return c.NoContent(204)
 }
 
@@ -543,6 +548,7 @@ func getEventById(c echo.Context) error {
 }
 
 var cache = map[string][]reservationCache{}
+var cacheLock = sync.Mutex{}
 
 type reservationCache struct {
 	Id int64
@@ -616,7 +622,11 @@ func reserveToEvent(c echo.Context) error {
 		break
 	}
 	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
-	cache[k] = append(cache[k], reservationCache{reservationID, user.ID, reservedAt})
+	func () {
+		cacheLock.Lock()
+		defer cacheLock.Unlock()
+		cache[k] = append(cache[k], reservationCache{reservationID, user.ID, reservedAt})
+	}()
 	return c.JSON(202, echo.Map{
 		"id":         reservationID,
 		"sheet_rank": params.Rank,
@@ -688,14 +698,18 @@ func unreserveEvent(c echo.Context) error {
 	}
 
 	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
-	v, _ := cache[k]
-	var n []reservationCache = nil
-	for _, c := range v {
-		if c.Id != rId {
-			n = append(n, c)
+	func () {
+		cacheLock.Lock()
+		defer cacheLock.Unlock()
+		v, _ := cache[k]
+		var n []reservationCache = nil
+		for _, c := range v {
+			if c.Id != rId {
+				n = append(n, c)
+			}
 		}
-	}
-	cache[k] = n
+		cache[k] = n
+	}()
 	return c.NoContent(204)
 }
 
@@ -940,6 +954,23 @@ order by reserved_at asc
 	return renderReportCSV(c, reports)
 }
 
+
+
+func initCache() {
+	cache = map[string][]reservationCache{}
+	rows, _ := db.Query(`select id, user_id, reserved_at, event_id, sheet_id from reservations where canceled_at is not null order by reserved_at`)
+	defer rows.Close()
+	for rows.Next() {
+		var c reservationCache
+		var eid int64
+		var sid int64
+		_ = rows.Scan(&c.Id, &c.UserId, &c.ReservedAt, &eid, &sid)
+		k := fmt.Sprintf("%d,%d", eid, sid)
+		log.Printf("%v", c)
+		cache[k] = append(cache[k], c)
+	}
+}
+
 func main() {
 
 	go func() {
@@ -980,7 +1011,7 @@ func main() {
 	e.GET("/api/events", getEventsList)
 	e.GET("/api/events/:id", getEventById)
 	e.POST("/api/events/:id/actions/reserve", reserveToEvent, loginRequired)
-	e.DELETE("/api/events/:id/sheets/:rank/:num/reservationCache", unreserveEvent, loginRequired)
+	e.DELETE("/api/events/:id/sheets/:rank/:num/reservation", unreserveEvent, loginRequired)
 	e.GET("/admin/", getAdmin, fillinAdministrator)
 	e.POST("/admin/api/actions/login", adminLogin)
 	e.POST("/admin/api/actions/logout", adminLogout, adminLoginRequired)
