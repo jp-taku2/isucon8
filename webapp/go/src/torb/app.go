@@ -23,7 +23,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/middleware"
+//	"github.com/labstack/echo/middleware"
 
 	_ "net/http/pprof"
 	"crypto/sha256"
@@ -589,6 +589,8 @@ func reserveToEvent(c echo.Context) error {
 	var reservationID int64
 	var reservedAt time.Time
 	for {
+		cacheLock.Lock()
+		defer cacheLock.Unlock()
 		if err := db.QueryRow("SELECT * FROM sheets WHERE id NOT IN (SELECT sheet_id FROM reservations WHERE event_id = ? AND canceled_at IS NULL FOR UPDATE) AND `rank` = ? ORDER BY RAND() LIMIT 1", event.ID, params.Rank).Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
 			if err == sql.ErrNoRows {
 				return resError(c, "sold_out", 409)
@@ -618,15 +620,13 @@ func reserveToEvent(c echo.Context) error {
 			log.Println("re-try: rollback by", err)
 			continue
 		}
-
 		break
 	}
 	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
-	func () {
-		cacheLock.Lock()
-		defer cacheLock.Unlock()
+
+
 		cache[k] = append(cache[k], reservationCache{reservationID, user.ID, reservedAt})
-	}()
+
 	return c.JSON(202, echo.Map{
 		"id":         reservationID,
 		"sheet_rank": params.Rank,
@@ -670,6 +670,8 @@ func unreserveEvent(c echo.Context) error {
 	}
 
 	tx, err := db.Begin()
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	if err != nil {
 		return err
 	}
@@ -698,18 +700,14 @@ func unreserveEvent(c echo.Context) error {
 	}
 
 	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
-	func () {
-		cacheLock.Lock()
-		defer cacheLock.Unlock()
-		v, _ := cache[k]
-		var n []reservationCache = nil
-		for _, c := range v {
-			if c.Id != rId {
-				n = append(n, c)
-			}
+	v, _ := cache[k]
+	var n []reservationCache = nil
+	for _, c := range v {
+		if c.Id != rId {
+			n = append(n, c)
 		}
-		cache[k] = n
-	}()
+	}
+	cache[k] = n
 	return c.NoContent(204)
 }
 
@@ -957,6 +955,8 @@ order by reserved_at asc
 
 
 func initCache() {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	cache = map[string][]reservationCache{}
 	rows, _ := db.Query(`select id, user_id, reserved_at, event_id, sheet_id from reservations where canceled_at is not null order by reserved_at`)
 	defer rows.Close()
@@ -966,7 +966,6 @@ func initCache() {
 		var sid int64
 		_ = rows.Scan(&c.Id, &c.UserId, &c.ReservedAt, &eid, &sid)
 		k := fmt.Sprintf("%d,%d", eid, sid)
-		log.Printf("%v", c)
 		cache[k] = append(cache[k], c)
 	}
 }
@@ -1000,7 +999,7 @@ func main() {
 		templates: template.Must(template.New("").Delims("[[", "]]").Funcs(funcs).ParseGlob("views/*.tmpl")),
 	}
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("secret"))))
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{Output: os.Stderr}))
+	//e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{Output: os.Stderr}))
 	e.Static("/", "public")
 	e.GET("/", index, fillinUser)
 	e.GET("/initialize", initialize)
