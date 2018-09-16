@@ -23,7 +23,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
-//	"github.com/labstack/echo/middleware"
+	//	"github.com/labstack/echo/middleware"
 
 	_ "net/http/pprof"
 	"crypto/sha256"
@@ -240,17 +240,9 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		"C": &Sheets{},
 	}
 
-	rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	sheets := generateSheets()
 
-	for rows.Next() {
-		var sheet Sheet
-		if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
-			return nil, err
-		}
+	for _, sheet := range sheets {
 		event.Sheets[sheet.Rank].Price = event.Price + sheet.Price
 		event.Total++
 		event.Sheets[sheet.Rank].Total++
@@ -551,8 +543,8 @@ var cache = map[string][]reservationCache{}
 var cacheLock = sync.Mutex{}
 
 type reservationCache struct {
-	Id int64
-	UserId int64
+	Id         int64
+	UserId     int64
 	ReservedAt time.Time
 }
 
@@ -624,8 +616,7 @@ func reserveToEvent(c echo.Context) error {
 	}
 	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
 
-
-		cache[k] = append(cache[k], reservationCache{reservationID, user.ID, reservedAt})
+	cache[k] = append(cache[k], reservationCache{reservationID, user.ID, reservedAt})
 
 	return c.JSON(202, echo.Map{
 		"id":         reservationID,
@@ -661,12 +652,11 @@ func unreserveEvent(c echo.Context) error {
 		return resError(c, "invalid_rank", 404)
 	}
 
-	var sheet Sheet
-	if err := db.QueryRow("SELECT * FROM sheets WHERE `rank` = ? AND num = ?", rank, num).Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
-		if err == sql.ErrNoRows {
-			return resError(c, "invalid_sheet", 404)
-		}
-		return err
+	num64, _ := strconv.ParseInt(num, 10, 64)
+	sheet := getRankSheet(num64)
+
+	if sheet.Rank != rank {
+		return resError(c, "invalid_sheet", 404)
 	}
 
 	tx, err := db.Begin()
@@ -952,7 +942,27 @@ order by reserved_at asc
 	return renderReportCSV(c, reports)
 }
 
+func generateSheets() []Sheet {
+	// &sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price
+	var sheets []Sheet
 
+	for i := 1; i <= 1000; i++ {
+		sheets = append(sheets, getRankSheet(int64(i)))
+	}
+
+	return sheets
+}
+
+func getRankSheet(num64 int64) Sheet {
+	if num64 <= 50 {
+		return Sheet{ID: num64, Rank: "S", Num: num64, Price: 5000}
+	} else if num64 <= 100 {
+		return Sheet{ID: num64, Rank: "A", Num: num64 - 50, Price: 3000}
+	} else if num64 <= 200 {
+		return Sheet{ID: num64, Rank: "B", Num: num64 - 100, Price: 1000}
+	}
+	return Sheet{ID: num64, Rank: "C", Num: num64 - 200, Price: 0}
+}
 
 func initCache() {
 	cacheLock.Lock()
