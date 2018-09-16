@@ -254,17 +254,14 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		event.Total++
 		event.Sheets[sheet.Rank].Total++
 
-		var reservation Reservation
-		err := db.QueryRow("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", event.ID, sheet.ID).Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt)
-		if err == nil {
-			sheet.Mine = reservation.UserID == loginUserID
+		if cs, ok := cache[fmt.Sprintf("%d,%d", event.ID, sheet.ID)]; ok && len(cs) > 0 {
+			c := cs[0]
+			sheet.Mine = c.UserId == loginUserID
 			sheet.Reserved = true
-			sheet.ReservedAtUnix = reservation.ReservedAt.Unix()
-		} else if err == sql.ErrNoRows {
+			sheet.ReservedAtUnix = c.ReservedAt.Unix()
+		} else {
 			event.Remains++
 			event.Sheets[sheet.Rank].Remains++
-		} else {
-			return nil, err
 		}
 
 		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
@@ -545,6 +542,14 @@ func getEventById(c echo.Context) error {
 	return c.JSON(200, sanitizeEvent(event))
 }
 
+var cache = map[string][]reservationCache{}
+
+type reservationCache struct {
+	Id int64
+	UserId int64
+	ReservedAt time.Time
+}
+
 func reserveToEvent(c echo.Context) error {
 	eventID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -576,6 +581,7 @@ func reserveToEvent(c echo.Context) error {
 
 	var sheet Sheet
 	var reservationID int64
+	var reservedAt time.Time
 	for {
 		if err := db.QueryRow("SELECT * FROM sheets WHERE id NOT IN (SELECT sheet_id FROM reservations WHERE event_id = ? AND canceled_at IS NULL FOR UPDATE) AND `rank` = ? ORDER BY RAND() LIMIT 1", event.ID, params.Rank).Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
 			if err == sql.ErrNoRows {
@@ -588,8 +594,8 @@ func reserveToEvent(c echo.Context) error {
 		if err != nil {
 			return err
 		}
-
-		res, err := tx.Exec("INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)", event.ID, sheet.ID, user.ID, time.Now().UTC().Format("2006-01-02 15:04:05.000000"))
+		reservedAt = time.Now().UTC()
+		res, err := tx.Exec("INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)", event.ID, sheet.ID, user.ID, reservedAt.Format("2006-01-02 15:04:05.000000"))
 		if err != nil {
 			tx.Rollback()
 			log.Println("re-try: rollback by", err)
@@ -609,6 +615,8 @@ func reserveToEvent(c echo.Context) error {
 
 		break
 	}
+	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
+	cache[k] = append(cache[k], reservationCache{reservationID, user.ID, reservedAt})
 	return c.JSON(202, echo.Map{
 		"id":         reservationID,
 		"sheet_rank": params.Rank,
@@ -664,6 +672,7 @@ func unreserveEvent(c echo.Context) error {
 		}
 		return err
 	}
+	rId := reservation.ID
 	if reservation.UserID != user.ID {
 		tx.Rollback()
 		return resError(c, "not_permitted", 403)
@@ -678,6 +687,15 @@ func unreserveEvent(c echo.Context) error {
 		return err
 	}
 
+	k := fmt.Sprintf("%d,%d", eventID, sheet.ID)
+	v, _ := cache[k]
+	var n []reservationCache = nil
+	for _, c := range v {
+		if c.Id != rId {
+			n = append(n, c)
+		}
+	}
+	cache[k] = n
 	return c.NoContent(204)
 }
 
@@ -890,7 +908,7 @@ select
 from reservations r
   inner join sheets s on s.id = r.sheet_id
   inner join events e on e.id = r.event_id
-order by reserved_at asc for update
+order by reserved_at asc
 `)
 	if err != nil {
 		return err
@@ -962,7 +980,7 @@ func main() {
 	e.GET("/api/events", getEventsList)
 	e.GET("/api/events/:id", getEventById)
 	e.POST("/api/events/:id/actions/reserve", reserveToEvent, loginRequired)
-	e.DELETE("/api/events/:id/sheets/:rank/:num/reservation", unreserveEvent, loginRequired)
+	e.DELETE("/api/events/:id/sheets/:rank/:num/reservationCache", unreserveEvent, loginRequired)
 	e.GET("/admin/", getAdmin, fillinAdministrator)
 	e.POST("/admin/api/actions/login", adminLogin)
 	e.POST("/admin/api/actions/logout", adminLogout, adminLoginRequired)
