@@ -922,6 +922,7 @@ func main() {
 		return renderReportCSV(c, reports)
 	}, adminLoginRequired)
 
+	_ = os.Remove("/var/run/torb/torb.sock")
 	l, _ := net.Listen("unix", "/var/run/torb/torb.sock")
 	e.Listener = l
 	e.Start("")
