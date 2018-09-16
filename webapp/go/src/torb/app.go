@@ -9,6 +9,8 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"sort"
@@ -21,6 +23,8 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
+
+	_ "net/http/pprof"
 )
 
 type User struct {
@@ -310,6 +314,11 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 var db *sql.DB
 
 func main() {
+
+	go func() {
+		http.ListenAndServe(":8000", nil)
+	}()
+
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
 		os.Getenv("DB_USER"), os.Getenv("DB_PASS"),
 		os.Getenv("DB_HOST"), os.Getenv("DB_PORT"),
@@ -913,7 +922,9 @@ func main() {
 		return renderReportCSV(c, reports)
 	}, adminLoginRequired)
 
-	e.Start(":8080")
+	l, _ := net.Listen("unix", "/var/run/torb/torb.sock")
+	e.Listener = l
+	e.Start("")
 }
 
 type Report struct {
