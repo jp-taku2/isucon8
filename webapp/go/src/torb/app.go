@@ -25,6 +25,8 @@ import (
 	"github.com/labstack/echo/middleware"
 
 	_ "net/http/pprof"
+	"crypto/sha256"
+	"encoding/hex"
 )
 
 type User struct {
@@ -492,10 +494,9 @@ func login(c echo.Context) error {
 		return err
 	}
 
-	var passHash string
-	if err := db.QueryRow("SELECT SHA2(?, 256)", params.Password).Scan(&passHash); err != nil {
-		return err
-	}
+	passHashByte := sha256.Sum256([]byte(params.Password))
+	passHash := hex.EncodeToString(passHashByte[:])
+
 	if user.PassHash != passHash {
 		return resError(c, "authentication_failed", 401)
 	}
