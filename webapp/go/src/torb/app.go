@@ -298,9 +298,14 @@ func fillinAdministrator(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 func validateRank(rank string) bool {
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM sheets WHERE `rank` = ?", rank).Scan(&count)
-	return count > 0
+	switch rank {
+	case "S":
+	case "A":
+	case "B":
+	case "C":
+		return true
+	}
+	return false
 }
 
 type Renderer struct {
