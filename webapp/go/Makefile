@@ -9,4 +9,4 @@ deps:
 
 .PHONY: build
 build:
-	GOPATH=`pwd`:`pwd`/vendor go build --tags netgo --ldflags '-extldflags "-static"' -v torb
+	GO111MODULE=off GOPATH=`pwd`:`pwd`/vendor go build --tags netgo --ldflags '-extldflags "-static"' -v torb
