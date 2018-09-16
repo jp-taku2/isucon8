@@ -3,6 +3,7 @@
 ROOT_DIR=$(cd $(dirname $0)/..; pwd)
 DB_DIR="$ROOT_DIR/db"
 BENCH_DIR="$ROOT_DIR/bench"
+DB_HOST="172.16.211.2"
 
 export MYSQL_PWD=isucon
 
@@ -16,8 +17,6 @@ if [ ! -f "$DB_DIR/isucon8q-initial-dataset.sql.gz" ]; then
 fi
 
 mysql -uisucon -h$DB_HOST torb -e 'ALTER TABLE reservations DROP KEY event_id_and_sheet_id_idx'
-gzip -dc "$DB_DIR/isucon8q-initial-dataset.sql.gz" | mysql -uisucon torb
+gzip -dc "$DB_DIR/isucon8q-initial-dataset.sql.gz" | mysql -uisucon -h$DB_HOST torb
 mysql -uisucon -h$DB_HOST torb -e 'ALTER TABLE reservations ADD KEY event_id_and_sheet_id_idx (event_id, sheet_id)'
-cat <<'EOF' | mysql -uroot
-GRANT ALL PRIVILEGES ON *.* TO isucon@"%" IDENTIFIED BY 'isucon' WITH GRANT OPTION;
-EOF
+
